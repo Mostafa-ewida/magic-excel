@@ -352,23 +352,58 @@ def search_keyword():
 
 # Function to convert Excel to Word
 def excel_to_word(excel_path, word_path):
-    df = pd.read_excel(excel_path)
+    logger = logging.getLogger("ExcelToWord")
 
-    doc = docx.Document()
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
 
-    # Add table to Word
-    table = doc.add_table(rows=len(df) + 1, cols=len(df.columns))
+    try:
+        logger.info(f"Starting Excel → Word conversion: {excel_path}")
 
-    # Add headers
-    for col_idx, column in enumerate(df.columns):
-        table.rows[0].cells[col_idx].text = str(column)
+        reader = LargeExcelReader(chunk_size=50000)
+        doc = docx.Document()
 
-    # Add data rows
-    for row_idx, row in df.iterrows():
-        for col_idx, cell in enumerate(row):
-            table.rows[row_idx + 1].cells[col_idx].text = str(cell)
+        total_rows = 0
+        table_created = False
 
-    doc.save(word_path)
+        for chunk in reader.read_excel(excel_path):
+            if chunk.empty:
+                continue
+
+            # Create table only once
+            if not table_created:
+                table = doc.add_table(rows=1, cols=len(chunk.columns))
+
+                # Add headers
+                for col_idx, column in enumerate(chunk.columns):
+                    table.rows[0].cells[col_idx].text = str(column)
+
+                table_created = True
+
+            # Append rows
+            for _, row in chunk.iterrows():
+                row_cells = table.add_row().cells
+                for col_idx, cell in enumerate(row):
+                    row_cells[col_idx].text = str(cell) if pd.notna(cell) else ""
+
+                total_rows += 1
+
+            logger.info(f"Processed {total_rows} rows so far...")
+
+        if not table_created:
+            doc.add_paragraph("No data found in Excel file.")
+
+        doc.save(word_path)
+
+        logger.info(f"Excel → Word conversion completed successfully. Total rows: {total_rows}")
+
+    except Exception as e:
+        logger.error(f"Excel → Word conversion failed: {str(e)}")
+        raise
 
 
 @app.route('/excel-to-word', methods=['POST'])
@@ -383,27 +418,30 @@ def convert_excel_to_word():
 
     os.makedirs("temp", exist_ok=True)
 
-    # Save uploaded Excel
-    excel_path = os.path.join("temp", file.filename)
-    file.save(excel_path)
+    try:
+        excel_path = os.path.join("temp", file.filename)
+        file.save(excel_path)
 
-    # Keep same filename but change extension
-    base_name = os.path.splitext(file.filename)[0]
-    word_filename = f"{base_name}.docx"
-    word_path = os.path.join("temp", word_filename)
+        base_name = os.path.splitext(file.filename)[0]
+        word_filename = f"{base_name}.docx"
+        word_path = os.path.join("temp", word_filename)
 
-    # Convert
-    excel_to_word(excel_path, word_path)
+        # Convert
+        excel_to_word(excel_path, word_path)
 
-    # Remove original Excel
-    os.remove(excel_path)
+        # Remove Excel safely
+        if os.path.exists(excel_path):
+            os.remove(excel_path)
 
-    return send_file(
-        word_path,
-        as_attachment=True,
-        download_name=word_filename,
-        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+        return send_file(
+            word_path,
+            as_attachment=True,
+            download_name=word_filename,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+
+    except Exception as e:
+        return f"Error converting file: {str(e)}", 500
 
 if __name__ == '__main__':
     # Ensure the temp directory exists
