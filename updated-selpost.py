@@ -1,4 +1,5 @@
-from flask import Flask, request, send_file, render_template
+from flask import Flask, request, send_file, render_template, jsonify
+import io
 import docx
 from openpyxl import Workbook, load_workbook
 import os
@@ -6,6 +7,8 @@ import pandas as pd
 import logging
 from pathlib import Path
 from typing import Generator, Union, Optional, Dict, Any
+from docx import Document
+from docxcompose.composer import Composer
 
 
 
@@ -192,6 +195,21 @@ def concatenate_excel_sheets(files):
         wb.save(output_path)
 
     return output_path
+
+def merge_docs(files):
+    master = Document(files[0])
+    composer = Composer(master)
+
+    for file in files[1:]:
+        doc = Document(file)
+        composer.append(doc)
+
+    output = io.BytesIO()
+    composer.save(output)
+    output.seek(0)
+    return output
+
+
 
 def search_keyword_in_first_column(file, keyword):
     result_wb = Workbook()
@@ -442,6 +460,37 @@ def convert_excel_to_word():
 
     except Exception as e:
         return f"Error converting file: {str(e)}", 500
+
+
+@app.route('/merge-word', methods=['POST'])
+def merge_word():
+    files = request.files.getlist('word_files')
+
+    if not files or len(files) < 2:
+        return jsonify({"error": "Upload at least 2 Word files"}), 400
+
+    try:
+        master = Document(files[0])
+        composer = Composer(master)
+
+        for file in files[1:]:
+            doc = Document(file)
+            composer.append(doc)
+
+        output = io.BytesIO()
+        composer.save(output)
+        output.seek(0)
+
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name="merged.docx",
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     # Ensure the temp directory exists
